@@ -81,7 +81,7 @@ from curobo.util_file import (
 from curobo.wrap.reacher.evaluator import TrajEvaluator, TrajEvaluatorConfig
 from curobo.wrap.reacher.ik_solver import IKResult, IKSolver, IKSolverConfig
 from curobo.wrap.reacher.trajopt import TrajOptResult, TrajOptSolver, TrajOptSolverConfig
-from curobo.wrap.reacher.types import ReacherSolveState, ReacherSolveType
+from curobo.wrap.reacher.types import ReacherSolveState, ReacherSolveType, Waypoint
 
 
 @dataclass
@@ -1178,6 +1178,9 @@ class MotionGenResult:
     #: stores the index of the goal pose reached when planning for a goalset.
     goalset_index: Optional[torch.Tensor] = None
 
+    #: trajectory for each waypoint segment when planning through waypoints
+    waypoint_plans: Optional[List[JointState]] = None
+
     def clone(self):
         """Clone the current result."""
         m = MotionGenResult(
@@ -1205,6 +1208,7 @@ class MotionGenResult:
             ),
             interpolation_dt=self.interpolation_dt,
             goalset_index=self.goalset_index.clone() if self.goalset_index is not None else None,
+            waypoint_plans=[p.clone() for p in self.waypoint_plans] if self.waypoint_plans is not None else None,
         )
         return m
 
@@ -1653,6 +1657,72 @@ class MotionGen(MotionGenConfig):
             plan_config,
             link_poses=link_poses,
         )
+        return result
+
+    def plan_waypoints(
+        self,
+        start_state: JointState,
+        waypoints: List[Waypoint],
+        plan_config: MotionGenPlanConfig = MotionGenPlanConfig(),
+    ) -> MotionGenResult:
+        """Plan a trajectory passing through a sequence of waypoints."""
+
+        segment_plans: List[JointState] = []
+        segment_results: List[MotionGenResult] = []
+        current_state = start_state.clone()
+
+        for wp in waypoints:
+            seg_result = self.plan_single(current_state, wp.pose, plan_config.clone())
+            segment_results.append(seg_result)
+            segment_plans.append(seg_result.get_interpolated_plan())
+            current_state = seg_result.optimized_plan[-1].unsqueeze(0).clone()
+            if wp.velocity is not None:
+                current_state.velocity = wp.velocity.view(1, -1)
+
+        success = all(r.success.item() for r in segment_results)
+
+        if segment_plans:
+            full_plan = segment_plans[0].clone()
+            for sp in segment_plans[1:]:
+                full_plan = full_plan.stack(sp[1:].clone())
+            interpolated_plan = full_plan
+        else:
+            interpolated_plan = None
+
+        if segment_results:
+            opt_plan = segment_results[0].optimized_plan.clone()
+            for r in segment_results[1:]:
+                opt_plan = opt_plan.stack(r.optimized_plan[1:].clone())
+            opt_dt = segment_results[0].optimized_dt
+            interp_dt = segment_results[0].interpolation_dt
+        else:
+            opt_plan = None
+            opt_dt = None
+            interp_dt = 0.02
+
+        result = MotionGenResult(
+            success=torch.as_tensor([success], device=self.tensor_args.device),
+            optimized_plan=opt_plan,
+            optimized_dt=opt_dt,
+            interpolated_plan=interpolated_plan,
+            interpolation_dt=interp_dt,
+            waypoint_plans=segment_plans,
+            path_buffer_last_tstep=[interpolated_plan.position.shape[-2] - 1] if interpolated_plan is not None else None,
+        )
+
+        result.solve_time = sum(r.solve_time for r in segment_results)
+        result.ik_time = sum(r.ik_time for r in segment_results)
+        result.graph_time = sum(r.graph_time for r in segment_results)
+        result.trajopt_time = sum(r.trajopt_time for r in segment_results)
+        result.finetune_time = sum(r.finetune_time for r in segment_results)
+        result.total_time = sum(r.total_time for r in segment_results)
+        if segment_results:
+            last = segment_results[-1]
+            result.position_error = last.position_error
+            result.rotation_error = last.rotation_error
+            result.cspace_error = last.cspace_error
+            result.status = last.status
+
         return result
 
     def plan_batch_goalset(

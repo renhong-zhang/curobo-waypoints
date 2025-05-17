@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
 
+import torch
+
 # CuRobo
 from curobo.rollout.rollout_base import Goal
 from curobo.types.base import TensorDeviceType
@@ -33,6 +35,14 @@ class ReacherSolveType(Enum):
     BATCH_GOALSET = 3
     BATCH_ENV = 4
     BATCH_ENV_GOALSET = 5
+
+
+@dataclass
+class Waypoint:
+    """Intermediate pose and optional velocity for waypoint planning."""
+
+    pose: Pose
+    velocity: Optional[torch.Tensor] = None
 
 
 @dataclass
