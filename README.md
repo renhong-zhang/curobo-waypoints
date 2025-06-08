@@ -41,6 +41,21 @@ cuRobo performs trajectory optimization across many seeds in parallel to find a 
 <img width="500" src="images/rrt_compare.gif">
 </p>
 
+### Planning through waypoints
+
+Use ``MotionGen.plan_waypoints`` with ``Waypoint`` objects to generate a
+trajectory passing through multiple poses.
+
+```python
+from curobo.wrap.reacher.types import Waypoint
+
+waypoints = [Waypoint(pose1), Waypoint(pose2)]
+result = motion_gen.plan_waypoints(start_state, waypoints)
+trajectory = result.get_interpolated_plan()
+```
+
+Each segment is available in ``result.waypoint_plans``.
+
 
 ## Citation
 

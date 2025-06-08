@@ -13,6 +13,7 @@
 from curobo.types.math import Pose
 from curobo.types.robot import JointState
 from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGenPlanConfig
+from curobo.wrap.reacher.types import Waypoint
 
 
 def pose_sequence_ur5e():
@@ -40,24 +41,16 @@ def pose_sequence_ur5e():
     pose_6 = [-0.865, 0.001, 0.411, 0.286, 0.648, -0.628, -0.321]
 
     pose_list = [home_pose, pose_1, pose_2, pose_3, pose_4, pose_5, pose_6, home_pose]
-    trajectory = start_state
-    motion_time = 0
-    for i, pose in enumerate(pose_list):
-        goal_pose = Pose.from_list(pose, q_xyzw=False)
-        start_state = trajectory[-1].unsqueeze(0).clone()
-        start_state.velocity[:] = 0.0
-        start_state.acceleration[:] = 0.0
-        result = motion_gen.plan_single(
-            start_state.clone(),
-            goal_pose,
-            plan_config=MotionGenPlanConfig(parallel_finetune=True, max_attempts=1),
-        )
-        if result.success.item():
-            plan = result.get_interpolated_plan()
-            trajectory = trajectory.stack(plan.clone())
-            motion_time += result.motion_time
-        else:
-            print(i, "fail", result.status)
+    waypoints = [Waypoint(Pose.from_list(p, q_xyzw=False)) for p in pose_list]
+
+    result = motion_gen.plan_waypoints(
+        start_state.clone(),
+        waypoints,
+        MotionGenPlanConfig(parallel_finetune=True, max_attempts=1),
+    )
+
+    trajectory = result.get_interpolated_plan()
+    motion_time = result.motion_time
     print("Motion Time (s):", motion_time)
     # CuRobo
     from curobo.util.usd_helper import UsdHelper
